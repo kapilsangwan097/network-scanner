@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Network Scanner - Device Discovery</title>
+    <!-- Google Fonts: Inter -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <!-- Link to custom CSS -->
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <div class="app-container">
+        <header class="header">
+            <div class="header-content">
+                <h1>Network Explorer</h1>
+                <p class="subtitle">Discover devices connected to your local network</p>
+            </div>
+        </header>
+
+        <main class="main-content">
+            <div class="control-panel glass-panel">
+                <div class="input-group">
+                    <label for="subnet-input">Target Subnet / IP Range</label>
+                    <input type="text" id="subnet-input" placeholder="e.g. 192.168.1.0/24">
+                </div>
+                <div class="action-buttons">
+                    <button id="scan-btn" class="btn primary-btn">
+                        <span class="btn-text">Start Scan</span>
+                        <div class="spinner hidden" id="scan-spinner"></div>
+                    </button>
+                    <button id="export-btn" class="btn secondary-btn" disabled>
+                        <span class="btn-text">Export CSV</span>
+                    </button>
+                </div>
+            </div>
+
+            <div class="error-banner hidden" id="error-banner"></div>
+
+            <div class="results-container glass-panel">
+                <div class="results-header">
+                    <h2>Discovered Devices <span class="badge" id="device-count">0</span></h2>
+                </div>
+                
+                <div class="table-responsive">
+                    <table class="results-table" id="results-table">
+                        <thead>
+                            <tr>
+                                <th>IP Address</th>
+                                <th>MAC Address</th>
+                                <th>Device Name</th>
+                                <th>Manufacturer / Vendor</th>
+                            </tr>
+                        </thead>
+                        <tbody id="table-body">
+                            <tr class="empty-state" id="empty-state">
+                                <td colspan="4">Click "Start Scan" to discover devices</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- Link to JS -->
+    <script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>
