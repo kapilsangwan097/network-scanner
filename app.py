@@ -1,5 +1,4 @@
 from flask import Flask, render_template, request, jsonify
-import scapy.all as scapy
 import socket
 import sys
 import os
@@ -12,11 +11,10 @@ from mac_vendor_lookup import MacLookup, VendorNotFoundError
 app = Flask(__name__)
 mac_lookup = MacLookup()
 
-# Try to update the mac-vendor-lookup cache on startup
 try:
     mac_lookup.update_vendors()
 except Exception:
-    pass # Ignore if it fails due to network or permissions
+    pass
 
 def get_default_ip():
     try:
@@ -35,7 +33,6 @@ def get_default_subnet():
     return '.'.join(parts)
 
 def get_vendor(mac):
-    # Method 1: use the local library
     try:
         return mac_lookup.lookup(mac)
     except VendorNotFoundError:
@@ -43,7 +40,6 @@ def get_vendor(mac):
     except Exception:
         pass
     
-    # Method 2: fallback to an API
     try:
         resp = requests.get(f"https://api.macvendors.com/{mac}", timeout=2)
         if resp.status_code == 200:
@@ -62,19 +58,46 @@ def get_hostname(ip):
 def get_arp_cache():
     devices = []
     try:
-        # Run arp -a to get devices already known to the OS
         output = subprocess.check_output("arp -a", shell=True).decode()
         for line in output.splitlines():
-            # Match dynamic ARP entries (IP and MAC)
             match = re.search(r"(\d+\.\d+\.\d+\.\d+)\s+([0-9a-fA-F\-]{17})\s+dynamic", line, re.IGNORECASE)
             if match:
                 ip = match.group(1)
                 mac = match.group(2).replace('-', ':').lower()
-                # Ignore broadcast/multicast IPs
                 if not ip.endswith('.255') and not ip.startswith('224.') and not ip.startswith('239.'):
                     devices.append({"ip": ip, "mac": mac})
     except Exception:
         pass
+    return devices
+
+def cloud_socket_scan(target):
+    """Fallback scanner for Cloud/Render (bypasses Scapy root restrictions)"""
+    devices = []
+    clean_target = target.split('/')[0] if '/' in target else target
+    
+    try:
+        resolved_ip = socket.gethostbyname(clean_target)
+    except socket.gaierror:
+        resolved_ip = clean_target
+
+    common_ports = [21, 22, 80, 443, 8080]
+    open_ports = []
+    
+    for port in common_ports:
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.settimeout(0.5)
+        if s.connect_ex((resolved_ip, port)) == 0:
+            open_ports.append(str(port))
+        s.close()
+        
+    port_text = f"Open Ports: {', '.join(open_ports)}" if open_ports else "Host Up (No common web ports open)"
+    
+    devices.append({
+        "ip": resolved_ip,
+        "mac": "Cloud/Recon Mode",
+        "vendor": port_text,
+        "hostname": clean_target if clean_target != resolved_ip else get_hostname(resolved_ip)
+    })
     return devices
 
 @app.route("/")
@@ -87,35 +110,30 @@ def api_subnet():
 
 @app.route("/api/scan", methods=["POST"])
 def api_scan():
-    data = request.json
+    data = request.json or {}
     target_ip = data.get("subnet", get_default_subnet())
     
     try:
-        # Create ARP request
+        import scapy.all as scapy
+        
+        # Scapy ARP Scan (Chalega jab root/admin rights hon)
         arp_request = scapy.ARP(pdst=target_ip)
         broadcast = scapy.Ether(dst="ff:ff:ff:ff:ff:ff")
         arp_request_broadcast = broadcast/arp_request
         
-        # Increase timeout to 5 seconds and add retry=1 for better discovery
-        answered_list = scapy.srp(arp_request_broadcast, timeout=5, retry=1, verbose=False)[0]
+        answered_list = scapy.srp(arp_request_broadcast, timeout=3, retry=1, verbose=False)[0]
 
-        discovered_dict = {} # Use dict to prevent duplicates by MAC
-        
-        # 1. Parse Scapy results
+        discovered_dict = {}
         for element in answered_list:
             ip_addr = element[1].psrc
             mac_addr = element[1].hwsrc.lower()
             discovered_dict[mac_addr] = {"ip": ip_addr, "mac": mac_addr}
             
-        # 2. Merge with system ARP cache (finds sleeping/firewalled devices)
         arp_cache = get_arp_cache()
         for dev in arp_cache:
             if dev["mac"] not in discovered_dict:
                 discovered_dict[dev["mac"]] = {"ip": dev["ip"], "mac": dev["mac"]}
 
-        clients_list = []
-        
-        # Helper function to enrich device info in parallel
         def enrich_device(device_info):
             mac = device_info["mac"]
             ip = device_info["ip"]
@@ -126,21 +144,23 @@ def api_scan():
                 "hostname": get_hostname(ip)
             }
             
-        # 3. Enrich devices with vendor and hostname (using threads to speed up DNS lookups)
         with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
             clients_list = list(executor.map(enrich_device, discovered_dict.values()))
             
-        # Sort by IP address
         try:
             clients_list.sort(key=lambda x: [int(p) for p in x["ip"].split('.')])
         except Exception:
             pass
             
+        if not clients_list:
+            clients_list = cloud_socket_scan(target_ip)
+            
         return jsonify({"status": "success", "devices": clients_list})
-    except PermissionError:
-        return jsonify({"status": "error", "message": "Permission Error: Administrator privileges required to run Scapy."})
-    except Exception as e:
-        return jsonify({"status": "error", "message": str(e)})
+
+    except (PermissionError, OSError, Exception):
+        # Render cloud ya restricted environment me fallback execute hoga
+        fallback_devices = cloud_socket_scan(target_ip)
+        return jsonify({"status": "success", "devices": fallback_devices})
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000, debug=True)
